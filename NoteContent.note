@@ -1,0 +1,210 @@
+
+import java.awt.image.BufferedImage;
+import javax.imageio.ImageIO;
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.Serializable;
+import java.util.ArrayList;
+import javax.swing.text.StyleConstants;
+import javax.swing.text.Element;
+
+// Add this class at the bottom of your file, outside the Noteapp class
+class NoteContent implements Serializable {
+    private static final long serialVersionUID = 1L;
+
+    // Store the document content
+    private byte[] documentBytes;
+
+    // Store positions and data for images
+    private ArrayList<ImageData> images = new ArrayList<>();
+
+    // Store positions and data for stickies
+    private ArrayList<StickieData> stickies = new ArrayList<>();
+}
+
+// Serializable wrapper for image data
+class ImageData implements Serializable {
+    private static final long serialVersionUID = 1L;
+    int position;
+    byte[] imageBytes;
+    int width;
+    int height;
+}
+
+// Serializable wrapper for sticky note data
+class StickieData implements Serializable {
+    private static final long serialVersionUID = 1L;
+    int position;
+    String text;
+    Font font;
+    Color backgroundColor;
+}
+
+// Modified save file method
+private void savetofile() {
+    JFileChooser saveChooser = new JFileChooser();
+    FileNameExtensionFilter filter = new FileNameExtensionFilter("NoteApp Files", "note");
+    saveChooser.setFileFilter(filter);
+    int option = saveChooser.showSaveDialog(this);
+
+    if (option == JFileChooser.APPROVE_OPTION) {
+        File fileToSave = saveChooser.getSelectedFile();
+        if (!fileToSave.getName().toLowerCase().endsWith(".note")) {
+            fileToSave = new File(fileToSave.getAbsolutePath() + ".note");
+        }
+
+        try {
+            NoteContent content = new NoteContent();
+
+            // Save document content
+            ByteArrayOutputStream bos = new ByteArrayOutputStream();
+            ObjectOutputStream oos = new ObjectOutputStream(bos);
+            oos.writeObject(textpane.getStyledDocument());
+            content.documentBytes = bos.toByteArray();
+
+            // Save images
+            StyledDocument doc = textpane.getStyledDocument();
+            Element root = doc.getDefaultRootElement();
+
+            for (int i = 0; i < root.getElementCount(); i++) {
+                Element elem = root.getElement(i);
+                for (int j = 0; j < elem.getElementCount(); j++) {
+                    Element child = elem.getElement(j);
+                    AttributeSet attrs = child.getAttributes();
+
+                    if (attrs.getAttribute(StyleConstants.IconAttribute) instanceof ImageIcon) {
+                        ImageIcon icon = (ImageIcon) attrs.getAttribute(StyleConstants.IconAttribute);
+                        ImageData imgData = new ImageData();
+                        imgData.position = child.getStartOffset();
+
+                        // Convert image to bytes
+                        BufferedImage bi = new BufferedImage(
+                                icon.getIconWidth(),
+                                icon.getIconHeight(),
+                                BufferedImage.TYPE_INT_ARGB);
+                        Graphics2D g2d = bi.createGraphics();
+                        icon.paintIcon(null, g2d, 0, 0);
+                        g2d.dispose();
+
+                        ByteArrayOutputStream imgBos = new ByteArrayOutputStream();
+                        ImageIO.write(bi, "png", imgBos);
+                        imgData.imageBytes = imgBos.toByteArray();
+                        imgData.width = icon.getIconWidth();
+                        imgData.height = icon.getIconHeight();
+
+                        content.images.add(imgData);
+                    }
+                }
+            }
+
+            // Save stickies
+            Component[] components = textpane.getComponents();
+            for (Component comp : components) {
+                if (comp instanceof JTextPane) {
+                    JTextPane sticky = (JTextPane) comp;
+                    StickieData stickieData = new StickieData();
+                    stickieData.position = textpane.getCaretPosition();
+                    stickieData.text = sticky.getText();
+                    stickieData.font = sticky.getFont();
+                    stickieData.backgroundColor = sticky.getBackground();
+                    content.stickies.add(stickieData);
+                }
+            }
+
+            // Save everything to file
+            try (ObjectOutputStream fileOos = new ObjectOutputStream(new FileOutputStream(fileToSave))) {
+                fileOos.writeObject(content);
+            }
+
+            JOptionPane.showMessageDialog(this, "File saved successfully!");
+
+        } catch (Exception e) {
+            e.printStackTrace();
+            JOptionPane.showMessageDialog(this,
+                    "Error saving file: " + e.getMessage(),
+                    "Error",
+                    JOptionPane.ERROR_MESSAGE);
+        }
+    }
+}
+
+// Modified load file method
+private void loadfromfile() {
+    JFileChooser chooser = new JFileChooser();
+    FileNameExtensionFilter filter = new FileNameExtensionFilter("NoteApp Files", "note");
+    chooser.setFileFilter(filter);
+    int action = chooser.showOpenDialog(this);
+
+    if (action == JFileChooser.APPROVE_OPTION) {
+        File file = chooser.getSelectedFile();
+        try (ObjectInputStream ois = new ObjectInputStream(new FileInputStream(file))) {
+            NoteContent content = (NoteContent) ois.readObject();
+
+            // Clear existing content
+            textpane.setText("");
+
+            // Restore document content
+            ByteArrayInputStream bis = new ByteArrayInputStream(content.documentBytes);
+            ObjectInputStream docOis = new ObjectInputStream(bis);
+            StyledDocument doc = (StyledDocument) docOis.readObject();
+            textpane.setStyledDocument(doc);
+
+            // Restore images
+            for (ImageData imgData : content.images) {
+                ByteArrayInputStream imgBis = new ByteArrayInputStream(imgData.imageBytes);
+                BufferedImage bi = ImageIO.read(imgBis);
+                ImageIcon icon = new ImageIcon(bi.getScaledInstance(
+                        imgData.width,
+                        imgData.height,
+                        Image.SCALE_SMOOTH));
+
+                textpane.setCaretPosition(imgData.position);
+                textpane.insertIcon(icon);
+            }
+
+            // Restore stickies
+            for (StickieData stickieData : content.stickies) {
+                JTextPane sticky = new JTextPane();
+                sticky.setText(stickieData.text);
+                sticky.setFont(stickieData.font);
+                sticky.setBackground(stickieData.backgroundColor);
+
+                // Recreate the document filter and key listener
+                ((AbstractDocument) sticky.getDocument()).setDocumentFilter(new DocumentFilter() {
+                    public void insertString(FilterBypass fb, int offset, String string, AttributeSet attr)
+                            throws BadLocationException {
+                        super.insertString(fb, offset, string, attr);
+                        if (string.equals("\n")) {
+                            sticky.setCaretPosition(offset);
+                        }
+                    }
+
+                    public void replace(FilterBypass fb, int offset, int length, String text, AttributeSet attrs)
+                            throws BadLocationException {
+                        super.replace(fb, offset, length, text, attrs);
+                        sticky.setCaretPosition(offset + text.length());
+                    }
+                });
+
+                sticky.addKeyListener(new KeyAdapter() {
+                    @Override
+                    public void keyPressed(KeyEvent e) {
+                        if (e.getKeyCode() == KeyEvent.VK_ENTER) {
+                            textpane.requestFocusInWindow();
+                        }
+                    }
+                });
+
+                textpane.setCaretPosition(stickieData.position);
+                textpane.insertComponent(sticky);
+            }
+
+        } catch (Exception e) {
+            e.printStackTrace();
+            JOptionPane.showMessageDialog(this,
+                    "Error opening file: " + e.getMessage(),
+                    "Error",
+                    JOptionPane.ERROR_MESSAGE);
+        }
+    }
+}
